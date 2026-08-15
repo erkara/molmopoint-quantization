@@ -56,6 +56,14 @@ process.
 
 ## Evaluate the promoted models
 
+The evaluator supports exactly two datasets. One dataset is evaluated per
+command; `--variants all` means all three model variants, not all datasets.
+
+| CLI value | Evaluation task | Public-data status | Lean-pipeline validation |
+| --- | --- | --- | --- |
+| `pointbench` | PointBench with AllenAI's official scorer | Complete: 982/982 examples | Unit-tested and GPU smoke-tested on a deterministic 49-example (5%) sample |
+| `pixmo-points` | PixMo-Points with AllenAI's PointingEval protocol | Partial public recovery: 231/436 images were available and SHA-verified | Implemented and unit-tested; equivalent lean-pipeline GPU smoke run is still pending |
+
 Run BF16, INT4, and INT8 on the same deterministic 5% PointBench sample:
 
 ```bash
@@ -64,6 +72,19 @@ python evaluate.py \
   --dataset pointbench \
   --fraction 0.05 \
   --seed 0 \
+  --run-name pointbench-5pct-seed0 \
+  --download-if-missing
+```
+
+Run the equivalent 5% smoke evaluation on PixMo-Points:
+
+```bash
+python evaluate.py \
+  --variants all \
+  --dataset pixmo-points \
+  --fraction 0.05 \
+  --seed 0 \
+  --run-name pixmo-points-5pct-seed0 \
   --download-if-missing
 ```
 
@@ -78,6 +99,10 @@ Run all currently recoverable PixMo-Points examples:
 ```bash
 python evaluate.py --variants all --dataset pixmo-points --download-if-missing
 ```
+
+To evaluate both datasets, run one PointBench command and one PixMo-Points
+command. Each command uses an identical shared selection for BF16, INT4, and
+INT8, but selections are not shared across different datasets.
 
 Useful options:
 
@@ -109,6 +134,9 @@ int4-summary.json
 int8-summary.json
 summary.json            Combined comparison
 ```
+
+For the two smoke commands above, results are written separately to
+`runs/pointbench-5pct-seed0/` and `runs/pixmo-points-5pct-seed0/`.
 
 `runs/`, `data/`, and `artifacts/` are intentionally excluded from Git. The
 reviewed release results and figure are retained in [`RESULTS.md`](RESULTS.md).
