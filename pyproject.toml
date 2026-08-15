@@ -3,9 +3,9 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "molmo-quant"
+name = "molmopoint-quantization"
 version = "0.1.0"
-description = "Reproducible bitsandbytes INT4 and INT8 releases for MolmoPoint-8B"
+description = "Reproducible INT4 and INT8 releases for AllenAI MolmoPoint-8B"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -23,24 +23,28 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-eval = ["datasets>=3.6,<4", "pyarrow>=18.1,<19", "scipy>=1.11,<2"]
+official = [
+  "absl-py",
+  "cached-property",
+  "cached-path>=1.6.4",
+  "datasets>=3.6,<4",
+  "editdistance",
+  "einops-exts",
+  "fiddle>=0.2.5",
+  "omegaconf",
+  "pyarrow>=18.1,<19",
+  "scipy>=1.11,<2",
+  "sentencepiece",
+  "torchmetrics",
+]
 dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
 
 [project.scripts]
-molmo-quant-build = "molmo_quant.cli.build_checkpoint:main"
-molmo-quant-smoke = "molmo_quant.cli.smoke_test:main"
-molmo-quant-compare = "molmo_quant.cli.compare_variants:main"
-molmo-quant-summarize = "molmo_quant.cli.summarize_smoke:main"
-molmo-quant-prepare-pixmo = "molmo_quant.cli.prepare_pixmo_eval:main"
-molmo-quant-eval-pixmo = "molmo_quant.cli.evaluate_pixmo:main"
-molmo-quant-summarize-pixmo = "molmo_quant.cli.summarize_pixmo:main"
-molmo-quant-eval-official = "molmo_quant.cli.evaluate_official:main"
+molmo-quantize = "quantize:main"
+molmo-evaluate = "evaluate:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
+py-modules = ["molmo_common", "quantize", "evaluate"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
