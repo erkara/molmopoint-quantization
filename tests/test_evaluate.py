@@ -1,12 +1,18 @@
+import tomllib
+from pathlib import Path
+
 import pytest
 
 from evaluate import (
     OFFICIAL_MOLMO2_COMMIT,
     default_run_name,
     parse_variants,
+    resolve_image_path,
     select_positions,
     summarize_records,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _record(source_index, *, category=None, metrics, latency=1.0, memory=8.0):
@@ -89,3 +95,80 @@ def test_pointing_summary_marks_partial_public_recovery():
     assert summary["coverage_fraction"] == 0.5
     assert summary["protocol_coverage"] == "partial-public-recovery"
     assert summary["performance"]["max_peak_vram_gib"] == 9.0
+
+
+def test_official_extra_declares_direct_http_dependencies():
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    official = project["project"]["optional-dependencies"]["official"]
+    assert "httpx>=0.27,<1" in official
+    assert "openai>=1,<3" in official
+
+
+def test_resolve_image_path_rebases_path_after_repository_moves(tmp_path):
+    project = tmp_path / "new-project"
+    image = project / "data/pixmo-points-eval/images/ab/example.img"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    stale = Path(
+        "/home/erdi/Dropbox/Docs/GitRepos/Molmo-Quantization/"
+        "data/pixmo-points-eval/images/ab/example.img"
+    )
+
+    resolved = resolve_image_path(
+        stale,
+        data_dir=project / "data/official",
+        project_dir=project,
+    )
+
+    assert resolved == image
+
+
+def test_resolve_image_path_prefers_an_existing_original(tmp_path):
+    original = tmp_path / "original.img"
+    original.write_bytes(b"image")
+
+    resolved = resolve_image_path(
+        original,
+        data_dir=tmp_path / "data",
+        project_dir=tmp_path / "project",
+    )
+
+    assert resolved == original
+
+
+def test_resolve_image_path_lists_attempted_locations(tmp_path):
+    stale = Path("/former/project/data/missing/image.img")
+
+    with pytest.raises(FileNotFoundError) as error:
+        resolve_image_path(
+            stale,
+            data_dir=tmp_path / "project/data/official",
+            project_dir=tmp_path / "project",
+        )
+
+    message = str(error.value)
+    assert "Attempted locations:" in message
+    assert str(stale) in message
+    assert str(tmp_path / "project/data/missing/image.img") in message
+
+
+def test_failed_examples_make_evaluation_incomplete():
+    records = [
+        _record(0, metrics={"precision": 1.0, "recall": 1.0, "f1": 1.0}),
+        {"source_index": 1, "status": "error"},
+    ]
+    summary = summarize_records(
+        records,
+        task="pointing_eval_v2",
+        variant="int4",
+        model="final-int4",
+        official_commit=OFFICIAL_MOLMO2_COMMIT,
+        expected_examples=2,
+        public_source_examples=2,
+        selected_examples=2,
+        max_new_tokens=192,
+    )
+
+    assert summary["passed_examples"] == 1
+    assert summary["failed_examples"] == 1
+    assert summary["evaluation_complete"] is False

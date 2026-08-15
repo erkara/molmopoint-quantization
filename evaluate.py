@@ -21,7 +21,6 @@ from PIL import Image
 
 from molmo_common import load_model, read_jsonl, run_pil_image, write_json
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 OFFICIAL_MOLMO2_COMMIT = "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a"
 BASE_REVISION = "188130f961c8e0888a34e11121a1423c461a01ba"
@@ -176,6 +175,7 @@ def run_worker(args: argparse.Namespace, dataset, official_commit: str) -> int:
                     dataset,
                     position=position,
                     task=DATASETS[args.dataset]["task"],
+                    data_dir=args.data_dir,
                     model=model,
                     processor=processor,
                     model_name=model_name,
@@ -426,6 +426,7 @@ def evaluate_one(
     *,
     position: int,
     task: str,
+    data_dir: str | Path,
     model,
     processor,
     model_name: str,
@@ -438,8 +439,9 @@ def evaluate_one(
     category = example.get("metadata", {}).get("category")
     label = example.get("label") or example.get("question")
     try:
-        image_reference = str(example["image"])
-        with Image.open(image_reference) as opened:
+        image_path = resolve_image_path(example["image"], data_dir=data_dir)
+        image_reference = str(image_path)
+        with Image.open(image_path) as opened:
             image = opened.convert("RGB")
         width, height = image.size
         result = run_pil_image(
@@ -505,6 +507,58 @@ def evaluate_one(
             "error": str(error),
             "traceback": traceback.format_exc(),
         }
+
+
+def resolve_image_path(
+    image_reference: str | Path,
+    *,
+    data_dir: str | Path,
+    project_dir: str | Path = PROJECT_ROOT,
+) -> Path:
+    """Resolve a dataset image, including paths recorded before the project moved."""
+    original = Path(image_reference).expanduser()
+    data_root = Path(data_dir).expanduser().resolve()
+    project_root = Path(project_dir).expanduser().resolve()
+    candidates = [original]
+
+    if original.is_absolute():
+        parts = original.parts
+        if "data" in parts:
+            data_index = parts.index("data")
+            relative_to_data = Path(*parts[data_index + 1 :])
+            candidates.extend(
+                [
+                    data_root / relative_to_data,
+                    project_root / "data" / relative_to_data,
+                ]
+            )
+        for repository_name in ("Molmo-Quantization", "molmopoint-quantization"):
+            if repository_name in parts:
+                repository_index = parts.index(repository_name)
+                relative_to_project = Path(*parts[repository_index + 1 :])
+                candidates.extend(
+                    [
+                        project_root / relative_to_project,
+                        data_root / relative_to_project,
+                    ]
+                )
+                break
+    else:
+        candidates.extend([data_root / original, project_root / original])
+
+    attempted: list[Path] = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in attempted:
+            continue
+        attempted.append(candidate)
+        if candidate.is_file():
+            return candidate
+
+    locations = "\n".join(f"  - {candidate}" for candidate in attempted)
+    raise FileNotFoundError(
+        f"Could not resolve dataset image {image_reference!s}. Attempted locations:\n{locations}"
+    )
 
 
 def official_metrics(
@@ -612,7 +666,7 @@ def summarize_records(
         "selected_examples": selected_examples,
         "passed_examples": len(passed),
         "failed_examples": len(failed),
-        "evaluation_complete": len(passed) + len(failed) == selected_examples,
+        "evaluation_complete": len(passed) == selected_examples and not failed,
         "settings": {
             "prompt_templates": PROMPT_TEMPLATES,
             "do_sample": False,
