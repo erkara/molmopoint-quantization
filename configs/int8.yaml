@@ -1,0 +1,13 @@
+model_id: allenai/MolmoPoint-8B
+revision: 188130f961c8e0888a34e11121a1423c461a01ba
+variant: int8
+output_dir: artifacts/MolmoPoint-8B-bnb-int8-native
+dtype: bfloat16
+trust_remote_code: true
+device_map: auto
+quantization:
+  method: bitsandbytes
+  load_in_8bit: true
+  llm_int8_threshold: 6.0
+  llm_int8_skip_modules:
+    - model.point_predictor

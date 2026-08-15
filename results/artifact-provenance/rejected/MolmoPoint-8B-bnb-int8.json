@@ -1,0 +1,16 @@
+{
+  "base_model": "allenai/MolmoPoint-8B",
+  "bitsandbytes_version": "0.50.0",
+  "created_at_utc": "2026-08-14T15:04:06Z",
+  "cuda_version": "13.0",
+  "gpu": "NVIDIA GeForce RTX 5090 Laptop GPU",
+  "load_seconds": 30.905,
+  "python_version": "3.12.3",
+  "requested_revision": "main",
+  "resolved_revision": "188130f961c8e0888a34e11121a1423c461a01ba",
+  "save_seconds": 11.034,
+  "schema_version": 1,
+  "torch_version": "2.10.0.dev20250916+cu130",
+  "transformers_version": "4.57.1",
+  "variant": "int8"
+}

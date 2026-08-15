@@ -1,0 +1,17 @@
+model_id: allenai/MolmoPoint-8B
+revision: 188130f961c8e0888a34e11121a1423c461a01ba
+variant: int4
+output_dir: artifacts/MolmoPoint-8B-bnb-nf4-vision-bridge-bf16
+dtype: bfloat16
+trust_remote_code: true
+device_map: auto
+quantization:
+  method: bitsandbytes
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_compute_dtype: bfloat16
+  bnb_4bit_use_double_quant: true
+  llm_int8_skip_modules:
+    - model.connector
+    - model.build_vit_embedding
+    - model.point_predictor

@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+.idea/
+.agents/
+.codex/
+
+# SHA256-validated benchmark image cache and raw manifests.
+data/
+
+# Large generated artifacts belong on Hugging Face, not in Git.
+artifacts/
+checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Local smoke/evaluation output. Keep reviewed summaries under results/.
+results/**/*.json
+results/**/*.csv
+results/**/*.jsonl
+!results/.gitkeep
+!results/pixmo/full/summary.json
+!results/official/**/*-summary.json
+!results/artifact-provenance/rejected/*.json
+
+.DS_Store

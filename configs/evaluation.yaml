@@ -1,0 +1,20 @@
+dataset_id: allenai/pixmo-points-eval
+split: test
+base_model: allenai/MolmoPoint-8B
+base_revision: 188130f961c8e0888a34e11121a1423c461a01ba
+seed: 0
+max_examples: 436
+max_new_tokens: 200
+prompt_template: "Point to the {label}."  # fixed across variants for paired agreement
+variants:
+  bf16: allenai/MolmoPoint-8B
+  int4: artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16
+  int8: artifacts/MolmoPoint-8B-bnb-int8-native
+metrics:
+  - parse_success
+  - exact_token_agreement
+  - point_count_agreement
+  - matched_point_distance
+  - mask_precision_recall_f1
+  - peak_vram
+  - inference_latency

@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "molmo-quant"
+version = "0.1.0"
+description = "Reproducible bitsandbytes INT4 and INT8 releases for MolmoPoint-8B"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "accelerate>=1.10,<2",
+  "bitsandbytes==0.50.0",
+  "decord2>=0.1",
+  "einops>=0.8",
+  "huggingface-hub>=0.34,<2",
+  "numpy>=1.26,<3",
+  "pillow>=10,<13",
+  "pyyaml>=6,<7",
+  "torch>=2.6",
+  "torchvision>=0.21",
+  "transformers==4.57.1",
+]
+
+[project.optional-dependencies]
+eval = ["datasets>=3.6,<4", "pyarrow>=18.1,<19", "scipy>=1.11,<2"]
+dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
+
+[project.scripts]
+molmo-quant-build = "molmo_quant.cli.build_checkpoint:main"
+molmo-quant-smoke = "molmo_quant.cli.smoke_test:main"
+molmo-quant-compare = "molmo_quant.cli.compare_variants:main"
+molmo-quant-summarize = "molmo_quant.cli.summarize_smoke:main"
+molmo-quant-prepare-pixmo = "molmo_quant.cli.prepare_pixmo_eval:main"
+molmo-quant-eval-pixmo = "molmo_quant.cli.evaluate_pixmo:main"
+molmo-quant-summarize-pixmo = "molmo_quant.cli.summarize_pixmo:main"
+molmo-quant-eval-official = "molmo_quant.cli.evaluate_official:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

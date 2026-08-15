@@ -1,0 +1,32 @@
+{
+  "coverage_fraction": 0.529817,
+  "evaluation_complete": true,
+  "expected_examples": 436,
+  "failed_examples": 0,
+  "metrics": {
+    "f1": 0.841512,
+    "precision": 0.86209,
+    "recall": 0.836065
+  },
+  "model": "artifacts/MolmoPoint-8B-bnb-int8-native",
+  "official_molmo2_commit": "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a",
+  "passed_examples": 231,
+  "performance": {
+    "max_peak_vram_gib": 11.6551,
+    "mean_inference_seconds": 1.463742,
+    "median_inference_seconds": 1.29148
+  },
+  "protocol": "allenai-molmo2-official-evaluator",
+  "protocol_coverage": "partial-public-recovery",
+  "public_source_examples": 231,
+  "schema_version": 1,
+  "selected_examples": 231,
+  "settings": {
+    "batch_size": 1,
+    "do_sample": false,
+    "max_new_tokens": 192,
+    "prompt_templates": "uber_model_v2"
+  },
+  "task": "pointing_eval_v2",
+  "variant": "int8"
+}

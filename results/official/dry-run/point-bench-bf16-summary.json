@@ -1,0 +1,31 @@
+{
+  "coverage_fraction": 1.0,
+  "expected_examples": 982,
+  "failed_examples": 0,
+  "metrics": {
+    "average": 0.0,
+    "categories": {
+      "spatial": 0.0
+    }
+  },
+  "model": "allenai/MolmoPoint-8B",
+  "official_molmo2_commit": "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a",
+  "passed_examples": 1,
+  "performance": {
+    "max_peak_vram_gib": 17.5832,
+    "mean_inference_seconds": 1.684702,
+    "median_inference_seconds": 1.684702
+  },
+  "protocol": "allenai-molmo2-official-evaluator",
+  "protocol_coverage": "full",
+  "public_source_examples": 982,
+  "schema_version": 1,
+  "settings": {
+    "batch_size": 1,
+    "do_sample": false,
+    "max_new_tokens": 256,
+    "prompt_templates": "uber_model_v2"
+  },
+  "task": "point_bench",
+  "variant": "bf16"
+}
