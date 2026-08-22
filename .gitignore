@@ -14,7 +14,7 @@ venv/
 # Large local checkpoints, datasets, and resumable run output.
 artifacts/
 data/
-runs/
+!runs/full_comparison.png
 results/
 
 # Model weights belong on Hugging Face, not in this Git repository.

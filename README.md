@@ -4,15 +4,17 @@ Reproducible INT4 and INT8 releases for
 [`allenai/MolmoPoint-8B`](https://huggingface.co/allenai/MolmoPoint-8B), with
 official-protocol quality evaluation against the BF16 model.
 
-The repository has two jobs:
+[![MolmoPoint quality and memory comparison](runs/full_comparison.png)](RESULTS.md)
 
-1. `quantize.py` builds the two validated Hugging Face-compatible checkpoints.
+This repository provides two reproducible workflows:
+
+1. `quantize.py` builds Hugging Face-compatible INT4 and INT8 checkpoints.
 2. `evaluate.py` evaluates BF16, INT4, and INT8 with AllenAI's official
    PointBench or PointingEval protocol.
 
-The final INT4 model quantizes the language transformer to NF4 while retaining
-the vision path and pointing head in BF16. The final INT8 model uses LLM.int8
-while retaining its pointing head in BF16 for native compatibility.
+INT4 uses NF4 for the language transformer while retaining the vision path and
+pointing head in BF16. INT8 uses LLM.int8 while retaining the pointing head in
+BF16 for native compatibility.
 
 ## Install
 
@@ -29,11 +31,11 @@ AllenAI's official evaluator is used from a separately pinned Molmo2 checkout.
 Passing `--download-if-missing` lets `evaluate.py` create that checkout and
 prepare missing public evaluation data.
 
-## Build the final models
+## Build the models
 
 ```bash
-python quantize.py --variant int4 --smoke-image path/to/image.png
-python quantize.py --variant int8 --smoke-image path/to/image.png
+python quantize.py --variant int4
+python quantize.py --variant int8
 ```
 
 The two immutable release recipes are:
@@ -50,21 +52,23 @@ artifacts/MolmoPoint-8B-bnb-int8-native/
 
 Each artifact contains packed weights, upstream model/processor assets, and a
 `quantization_provenance.json`. The build refuses to overwrite an existing
-checkpoint unless `--overwrite` is supplied. When a smoke image is provided,
-the saved checkpoint must reload and run through native Transformers in a fresh
-process.
+checkpoint unless `--overwrite` is supplied. Use `evaluate.py` to load and
+validate the resulting checkpoints with real benchmark examples.
 
-## Evaluate the promoted models
+Checkpoint weights are not stored in Git. This repository contains the recipes
+needed to build them locally, along with model cards under [`huggingface/`](huggingface/).
+
+## Evaluate the models
 
 The evaluator supports exactly two datasets. One dataset is evaluated per
 command; `--variants all` means all three model variants, not all datasets.
 
-| CLI value | Evaluation task | Public-data status | Lean-pipeline validation |
+| CLI value | Evaluation task | Public-data status | Validation |
 | --- | --- | --- | --- |
-| `pointbench` | PointBench with AllenAI's official scorer | Complete: 982/982 examples | Unit-tested and GPU smoke-tested on a deterministic 49-example (5%) sample |
-| `pixmo-points` | PixMo-Points with AllenAI's PointingEval protocol | Partial public recovery: 231/436 images were available and SHA-verified | Implemented and unit-tested; equivalent lean-pipeline GPU smoke run is still pending |
+| `pointbench` | PointBench with AllenAI's official scorer | Complete: 982/982 examples | Full GPU run: 982/982 passed, zero failures |
+| `pixmo-points` | PixMo-Points with AllenAI's PointingEval protocol | Partial public recovery: 231/436 images were available and SHA-verified | Full available-data GPU run: 231/231 passed, zero failures |
 
-Run BF16, INT4, and INT8 on the same deterministic 5% PointBench sample:
+Run BF16, INT4, and INT8 on the same deterministic 5% sample:
 
 ```bash
 python evaluate.py \
@@ -72,37 +76,18 @@ python evaluate.py \
   --dataset pointbench \
   --fraction 0.05 \
   --seed 0 \
-  --run-name pointbench-5pct-seed0 \
   --download-if-missing
 ```
 
-Run the equivalent 5% smoke evaluation on PixMo-Points:
-
-```bash
-python evaluate.py \
-  --variants all \
-  --dataset pixmo-points \
-  --fraction 0.05 \
-  --seed 0 \
-  --run-name pixmo-points-5pct-seed0 \
-  --download-if-missing
-```
-
-Run the complete public PointBench task:
+Use `--dataset pixmo-points` for PixMo-Points. Omit `--fraction` (or
+`--max-examples`) to evaluate every available example:
 
 ```bash
 python evaluate.py --variants all --dataset pointbench --download-if-missing
 ```
 
-Run all currently recoverable PixMo-Points examples:
-
-```bash
-python evaluate.py --variants all --dataset pixmo-points --download-if-missing
-```
-
-To evaluate both datasets, run one PointBench command and one PixMo-Points
-command. Each command uses an identical shared selection for BF16, INT4, and
-INT8, but selections are not shared across different datasets.
+One dataset is evaluated per command. Every variant in a command uses the same
+deterministic example selection.
 
 Useful options:
 
@@ -111,7 +96,7 @@ Useful options:
 --fraction 0.05             Deterministic fraction shared by every variant
 --max-examples 50           Deterministic fixed-size sample
 --seed 0                    Sample seed
---run-name NAME             Explicit output directory name
+--run-name NAME             Optional override for the generated run name
 --data-dir PATH             Reusable dataset cache
 --official-source PATH      Existing pinned AllenAI Molmo2 checkout
 --download-if-missing       Permit source/data downloads
@@ -125,21 +110,27 @@ separate processes so CUDA state cannot leak between variants.
 Every run is resumable and saved under `runs/<run-name>/`:
 
 ```text
-selection.json          Exact shared positions and original source indices
-bf16.jsonl              Raw per-example BF16 predictions
-int4.jsonl              Raw per-example INT4 predictions
-int8.jsonl              Raw per-example INT8 predictions
-bf16-summary.json       Compact per-model result
-int4-summary.json
-int8-summary.json
-summary.json            Combined comparison
+json_summaries/
+  selection.json        Exact shared positions and original source indices
+  bf16.jsonl            Raw per-example BF16 predictions
+  int4.jsonl            Raw per-example INT4 predictions
+  int8.jsonl            Raw per-example INT8 predictions
+  bf16-summary.json     Compact per-model result
+  int4-summary.json
+  int8-summary.json
+  summary.json          Combined comparison
+full_comparison.png     Quality-versus-VRAM plot for the effective variants
+sample_predictions.png  Three deterministic qualitative examples
 ```
 
-For the two smoke commands above, results are written separately to
-`runs/pointbench-5pct-seed0/` and `runs/pixmo-points-5pct-seed0/`.
+BF16 is included automatically when INT4 or INT8 is requested so candidate
+results always have a baseline.
 
-`runs/`, `data/`, and `artifacts/` are intentionally excluded from Git. The
-reviewed release results and figure are retained in [`RESULTS.md`](RESULTS.md).
+The sample command above writes to `runs/pointbench-5pct-seed0/` by default.
+
+Raw run outputs, `data/`, and `artifacts/` are intentionally excluded from Git.
+The combined publication figure at `runs/full_comparison.png` is retained along
+with the documented results in [`RESULTS.md`](RESULTS.md).
 
 ## Dataset availability
 
@@ -158,18 +149,16 @@ evaluate.py       Download data and run official evaluation
 molmo_common.py   Shared native loading and deterministic inference
 configs/          Two final release recipes
 tests/            Lightweight CPU-only integration tests
-assets/           Main figure and rejected-checkpoint provenance
-huggingface/      Draft INT4 and INT8 model cards
+runs/             Published comparison figure; local run outputs are ignored
+huggingface/      INT4 and INT8 model cards
 RESULTS.md        Selection evidence and final results
 ```
 
-The earlier fully modular research implementation is preserved on the
-`codex/modular-archive` branch.
+## Limitations
 
-## Accuracy language
-
-Use “agreement on tested examples,” not “lossless,” “identical,” or “no accuracy
-loss.” Aggregate scores are close, but individual generations can differ.
+Aggregate scores are close, but individual generations can differ. Results
+should be interpreted as agreement on tested examples, not as lossless or
+identical behavior across model variants.
 
 ## Attribution and publication
 

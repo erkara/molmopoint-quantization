@@ -1,0 +1,37 @@
+{
+  "coverage_fraction": 1.0,
+  "evaluation_complete": true,
+  "expected_examples": 982,
+  "failed_examples": 0,
+  "metrics": {
+    "average": 0.706857,
+    "categories": {
+      "affordable": 0.863636,
+      "counting": 0.770408,
+      "reasoning": 0.735751,
+      "spatial": 0.779487,
+      "steerable": 0.385
+    }
+  },
+  "model": "/home/erdi/Dropbox/Docs/GitRepos/molmopoint-quantization/artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16",
+  "official_molmo2_commit": "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a",
+  "passed_examples": 982,
+  "performance": {
+    "max_peak_vram_gib": 8.7165,
+    "mean_inference_seconds": 1.403269,
+    "median_inference_seconds": 1.303825
+  },
+  "protocol": "allenai-molmo2-official-evaluator",
+  "protocol_coverage": "full",
+  "public_source_examples": 982,
+  "schema_version": 1,
+  "selected_examples": 982,
+  "settings": {
+    "batch_size": 1,
+    "do_sample": false,
+    "max_new_tokens": 256,
+    "prompt_templates": "uber_model_v2"
+  },
+  "task": "point_bench",
+  "variant": "int4"
+}

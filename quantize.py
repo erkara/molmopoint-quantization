@@ -4,23 +4,17 @@
 from __future__ import annotations
 
 import argparse
-import gc
 import platform
 import shutil
-import subprocess
-import sys
 import time
-import traceback
 from dataclasses import dataclass, replace
-from enum import Enum
+from enum import StrEnum
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
 
 import yaml
 
-from molmo_common import load_model, run_image, torch_dtype, write_json
-
+from molmo_common import torch_dtype, write_json
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIGS = {"int4": PROJECT_ROOT / "configs/int4.yaml", "int8": PROJECT_ROOT / "configs/int8.yaml"}
@@ -45,10 +39,9 @@ INT4_BF16_MODULES = [
     "model.build_vit_embedding",
     "model.point_predictor",
 ]
-DEFAULT_PROMPT = "Point to the center of the colored spot or band."
 
 
-class Variant(str, Enum):
+class Variant(StrEnum):
     INT4 = "int4"
     INT8 = "int8"
 
@@ -62,10 +55,11 @@ class BuildConfig:
     dtype: str = "bfloat16"
     trust_remote_code: bool = True
     device_map: str = "auto"
-    quantization: dict[str, Any] | None = None
+    quantization: dict | None = None
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "BuildConfig":
+    def from_yaml(cls, path: str | Path) -> BuildConfig:
+        """Load a release recipe from YAML."""
         config_path = Path(path)
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
@@ -89,6 +83,7 @@ class BuildConfig:
         )
 
     def validate(self) -> None:
+        """Reject changes to the validated quantization recipe."""
         actual = self.quantization or {}
         if self.variant is Variant.INT4:
             expected = {
@@ -119,24 +114,15 @@ class BuildConfig:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", choices=("int4", "int8"))
+    parser.add_argument("--variant", choices=("int4", "int8"), required=True)
     parser.add_argument("--config", help="Override the final config selected by --variant")
     parser.add_argument("--output-dir", help="Override the checkpoint destination")
-    parser.add_argument("--smoke-image", help="Image for a native fresh-process reload gate")
-    parser.add_argument("--skip-smoke", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--_smoke-model", help=argparse.SUPPRESS)
-    parser.add_argument("--_smoke-output", help=argparse.SUPPRESS)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args._smoke_model:
-        return _smoke_worker(args)
-    if not args.variant:
-        raise SystemExit("--variant is required")
-
     config = BuildConfig.from_yaml(args.config or CONFIGS[args.variant])
     config.validate()
     if args.output_dir:
@@ -153,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     resolved = replace(config, revision=resolved_revision)
     print(f"[quantize] Loading {config.model_id}@{resolved_revision} as {config.variant.value}")
     started_at = time.perf_counter()
-    model, processor = _load_source_model(resolved)
+    model = _load_source_model(resolved)
     load_seconds = time.perf_counter() - started_at
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -170,35 +156,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     write_json(config.output_dir / "quantization_provenance.json", provenance)
 
-    if args.smoke_image and not args.skip_smoke:
-        del model, processor
-        gc.collect()
-        import torch
-
-        torch.cuda.empty_cache()
-        smoke_output = PROJECT_ROOT / "runs/build" / f"{config.output_dir.name}-smoke.json"
-        command = [
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--variant",
-            config.variant.value,
-            "--smoke-image",
-            str(Path(args.smoke_image).resolve()),
-            "--_smoke-model",
-            str(config.output_dir),
-            "--_smoke-output",
-            str(smoke_output),
-        ]
-        print("[quantize] Starting native reload in a fresh process")
-        subprocess.run(command, check=True)
-    elif not args.smoke_image:
-        print("[quantize] No --smoke-image supplied; native reload gate was not run")
     return 0
 
 
 def _load_source_model(config: BuildConfig):
+    from transformers import AutoModelForImageTextToText, BitsAndBytesConfig
+
     from molmo_common import require_cuda
-    from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 
     require_cuda()
     settings = config.quantization or {}
@@ -216,12 +180,6 @@ def _load_source_model(config: BuildConfig):
             llm_int8_threshold=settings["llm_int8_threshold"],
             llm_int8_skip_modules=settings["llm_int8_skip_modules"],
         )
-    processor = AutoProcessor.from_pretrained(
-        config.model_id,
-        revision=config.revision,
-        trust_remote_code=config.trust_remote_code,
-        padding_side="left",
-    )
     model = AutoModelForImageTextToText.from_pretrained(
         config.model_id,
         revision=config.revision,
@@ -230,46 +188,11 @@ def _load_source_model(config: BuildConfig):
         quantization_config=quantization,
         device_map=config.device_map,
     )
-    return model, processor
-
-
-def _smoke_worker(args: argparse.Namespace) -> int:
-    if not args.variant or not args.smoke_image or not args._smoke_output:
-        raise ValueError("Internal smoke worker requires variant, image, model, and output")
-    try:
-        model, processor = load_model(args._smoke_model)
-        result = run_image(
-            model,
-            processor,
-            model_name=args._smoke_model,
-            processor_name=args._smoke_model,
-            variant=args.variant,
-            image_path=args.smoke_image,
-            prompt=DEFAULT_PROMPT,
-        )
-        write_json(args._smoke_output, result.to_dict())
-        print(
-            f"[smoke] {args.variant}: points={len(result.points)}, "
-            f"inference={result.inference_seconds:.3f}s, peak={result.peak_vram_gib:.3f} GiB"
-        )
-        return 0 if result.parse_success else 2
-    except Exception as error:
-        write_json(
-            args._smoke_output,
-            {
-                "status": "error",
-                "variant": args.variant,
-                "model": args._smoke_model,
-                "image": str(Path(args.smoke_image).resolve()),
-                "error_type": type(error).__name__,
-                "error": str(error),
-                "traceback": traceback.format_exc(),
-            },
-        )
-        return 1
+    return model
 
 
 def _resolve_revision(model_id: str, revision: str) -> str:
+    """Resolve a remote revision to an immutable commit."""
     path = Path(model_id)
     if path.exists():
         return str(path.resolve())
@@ -279,6 +202,7 @@ def _resolve_revision(model_id: str, revision: str) -> str:
 
 
 def _sync_processor_assets(model_id: str, revision: str, output_dir: Path) -> None:
+    """Copy the upstream processor files needed for native loading."""
     from huggingface_hub import HfApi, hf_hub_download
 
     files = HfApi().list_repo_files(model_id, revision=revision)
@@ -302,7 +226,8 @@ def _collect_provenance(
     resolved_revision: str,
     load_seconds: float,
     save_seconds: float,
-) -> dict[str, Any]:
+) -> dict:
+    """Record the build recipe and environment."""
     import bitsandbytes
     import torch
     import transformers

@@ -7,7 +7,6 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from PIL import Image
 
@@ -34,7 +33,7 @@ class InferenceResult:
     inference_seconds: float
     peak_vram_gib: float
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict:
         payload = asdict(self)
         payload["status"] = "passed"
         return payload
@@ -106,6 +105,7 @@ def run_image(
     prompt: str,
     max_new_tokens: int = 200,
 ) -> InferenceResult:
+    """Open an image and run deterministic pointing inference."""
     image_path = Path(image_path).resolve()
     with Image.open(image_path) as opened:
         image = opened.convert("RGB")
@@ -211,7 +211,8 @@ def run_pil_image(
     )
 
 
-def write_json(path: str | Path, payload: dict[str, Any]) -> None:
+def write_json(path: str | Path, payload: dict) -> None:
+    """Write JSON atomically."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -219,7 +220,8 @@ def write_json(path: str | Path, payload: dict[str, Any]) -> None:
     temporary.replace(destination)
 
 
-def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
+def read_jsonl(path: str | Path) -> list[dict]:
+    """Read JSONL records, returning an empty list when absent."""
     source = Path(path)
     if not source.exists():
         return []

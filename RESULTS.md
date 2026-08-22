@@ -3,9 +3,9 @@
 The final INT4 and INT8 checkpoints preserve MolmoPoint-8B pointing quality
 while substantially reducing peak allocated GPU memory.
 
-![Official PointingEval F1 and peak GPU memory](assets/comparison.png)
+![Official PointBench, PixMo-Points, and peak GPU memory comparison](runs/full_comparison.png)
 
-## Final release candidates
+## Release checkpoints
 
 - **INT4:** NF4 language transformer with BF16 compute and double
   quantization; vision encoder, multimodal connector, visual embedding, and
@@ -28,15 +28,16 @@ of the five official categories.
 
 | Variant | Affordable | Counting | Reasoning | Spatial | Steerable | Average | Peak VRAM |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BF16 | 86.36 | 72.45 | 77.72 | 77.95 | 38.00 | 70.50 | 18.24 GiB |
-| **Final INT4** | **86.87** | **75.51** | **74.09** | **78.46** | **38.50** | **70.69** | **8.69 GiB** |
-| **Final INT8** | **86.36** | **72.96** | **76.68** | **76.92** | **39.50** | **70.49** | **11.66 GiB** |
+| BF16 | 86.36 | 73.47 | 77.72 | 77.95 | 39.00 | 70.90 | 18.26 GiB |
+| **INT4** | **86.36** | **77.04** | **73.58** | **77.95** | **38.50** | **70.69** | **8.72 GiB** |
+| **INT8** | **86.87** | **75.51** | **77.72** | **76.92** | **38.00** | **71.00** | **11.68 GiB** |
 
-The reproduced BF16 average, 70.50%, is close to the 70.7 reported for
-MolmoPoint-8B. INT4 is +0.19 percentage points and INT8 is -0.01 points versus
-the reproduced BF16 run. The small positive INT4 difference reflects discrete
-prediction variation; it is not evidence that quantization improves the base
-model.
+All three variants passed all 982 selected examples with zero failures. The
+reproduced BF16 average, 70.90%, is close to the 70.7 reported for
+MolmoPoint-8B. INT4 is -0.21 percentage points and INT8 is +0.10 points versus
+the reproduced BF16 run. Small differences in either direction reflect
+discrete prediction variation; they are not evidence that quantization improves
+the base model.
 
 ## Official PointingEval — 231/436 publicly recoverable examples
 
@@ -47,15 +48,15 @@ unavailable source URLs.
 
 | Variant | Examples | Precision | Recall | F1 | F1 delta | Peak VRAM |
 |---|---:|---:|---:|---:|---:|---:|
-| BF16 | 231/436 | 86.43 | 83.93 | 84.40 | baseline | 18.24 GiB |
-| **Final INT4** | **231/436** | **86.12** | **83.70** | **84.06** | **-0.34 pt** | **8.69 GiB** |
-| **Final INT8** | **231/436** | **86.21** | **83.61** | **84.15** | **-0.25 pt** | **11.66 GiB** |
+| BF16 | 231/436 | 86.09 | 83.50 | 84.02 | baseline | 18.26 GiB |
+| **INT4** | **231/436** | **86.12** | **83.77** | **84.11** | **+0.08 pt** | **8.72 GiB** |
+| **INT8** | **231/436** | **86.30** | **84.17** | **84.49** | **+0.47 pt** | **11.68 GiB** |
 
-INT4 reduces peak allocated GPU memory by 52.3% and remains within 0.34 F1
-points of BF16. INT8 reduces memory by 36.1% and remains within 0.25 points.
-This is an official-scorer result with 52.98% public-data coverage, not a full
-436-example reproduction and not directly comparable with the paper's
-full-dataset result.
+All three variants passed all 231 recoverable examples with zero failures. INT4
+reduces peak allocated GPU memory by 52.3% and is +0.08 F1 points versus BF16;
+INT8 reduces memory by 36.0% and is +0.47 points. These are official-scorer
+results with 52.98% public-data coverage, not a full 436-example reproduction
+and not directly comparable with the paper's full-dataset result.
 
 ## How the INT4 recipe was selected
 
@@ -96,6 +97,9 @@ but is separate from the official-protocol tables above.
 
 ## Reproducibility
 
+- Fresh evaluation date: 2026-08-16
+- PointBench run: `runs/pointbench-full-rerun-20260816/`
+- PixMo-Points run: `runs/pixmo-points-full-rerun-20260816/`
 - Upstream model revision:
   `188130f961c8e0888a34e11121a1423c461a01ba`
 - Official Molmo2 evaluator commit:
@@ -105,10 +109,9 @@ but is separate from the official-protocol tables above.
 - Transformers: `4.57.1`
 - bitsandbytes: `0.50.0`
 
-Rejected checkpoint weights were removed after selection. Their compact build
-metadata remains in [`assets/rejected-provenance.json`](assets/rejected-provenance.json).
-The original modular implementation and detailed intermediate reports remain
-available on the `codex/modular-archive` branch.
+Rejected checkpoint weights were removed after selection. The original modular
+implementation and detailed intermediate reports remain available on the
+`codex/modular-archive` branch.
 
 ## Interpretation
 
