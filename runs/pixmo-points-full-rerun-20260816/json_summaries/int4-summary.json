@@ -8,7 +8,7 @@
     "precision": 0.861183,
     "recall": 0.837683
   },
-  "model": "/home/erdi/Dropbox/Docs/GitRepos/molmopoint-quantization/artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16",
+  "model": "artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16",
   "official_molmo2_commit": "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a",
   "passed_examples": 231,
   "performance": {

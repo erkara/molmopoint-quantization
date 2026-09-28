@@ -40,8 +40,8 @@ DATASETS = {
 }
 MODEL_DEFAULTS = {
     "bf16": "allenai/MolmoPoint-8B",
-    "int4": str(PROJECT_ROOT / "artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16"),
-    "int8": str(PROJECT_ROOT / "artifacts/MolmoPoint-8B-bnb-int8-native"),
+    "int4": "artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16",
+    "int8": "artifacts/MolmoPoint-8B-bnb-int8-native",
 }
 
 
@@ -209,6 +209,7 @@ def run_worker(args: argparse.Namespace, dataset, official_commit: str) -> int:
         if latest.get(_source_index(dataset, position), {}).get("status") != "passed"
     ]
     model_name = getattr(args, f"{variant}_model")
+    model_source = resolve_model_source(model_name)
     revision = args.revision if variant == "bf16" else "main"
     max_new_tokens = args.max_new_tokens or DATASETS[args.dataset]["tokens"]
     completed = len(positions) - len(pending)
@@ -224,7 +225,7 @@ def run_worker(args: argparse.Namespace, dataset, official_commit: str) -> int:
             progress.set_postfix(status="already complete")
         else:
             progress.set_postfix(stage="loading model")
-            model, processor = load_model(model_name, revision=revision)
+            model, processor = load_model(model_source, revision=revision)
             model.eval()
             progress.set_postfix(stage="evaluating")
             with output_path.open("a", encoding="utf-8", buffering=1) as handle:
@@ -322,6 +323,23 @@ def parse_variants(raw: str) -> list[str]:
     if "bf16" not in requested:
         requested.insert(0, "bf16")
     return [variant for variant in ("bf16", "int4", "int8") if variant in requested]
+
+
+def resolve_model_source(model_name: str, project_dir: str | Path = PROJECT_ROOT) -> str:
+    """Resolve a local model path for loading without changing its saved name."""
+    path = Path(model_name).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+
+    project_path = Path(project_dir).resolve() / path
+    if project_path.exists():
+        return str(project_path.resolve())
+
+    if path.exists():
+        return str(path.resolve())
+
+    # A non-existent path can be a Hugging Face repository id.
+    return model_name
 
 
 def select_positions(
@@ -533,7 +551,7 @@ def evaluate_one(
     label = example.get("label") or example.get("question")
     try:
         image_path = resolve_image_path(example["image"], data_dir=data_dir)
-        image_reference = str(image_path)
+        image_reference = portable_image_reference(image_path, data_dir=data_dir)
         with Image.open(image_path) as opened:
             image = opened.convert("RGB")
         width, height = image.size
@@ -648,6 +666,30 @@ def resolve_image_path(
     raise FileNotFoundError(
         f"Could not resolve dataset image {image_reference!s}. Attempted locations:\n{locations}"
     )
+
+
+def portable_image_reference(
+    image_path: str | Path,
+    *,
+    data_dir: str | Path,
+    project_dir: str | Path = PROJECT_ROOT,
+) -> str:
+    """Store a portable image reference while inference uses the resolved path."""
+    image_path = Path(image_path).resolve()
+    project_root = Path(project_dir).resolve()
+    data_root = Path(data_dir).resolve()
+
+    try:
+        return image_path.relative_to(project_root).as_posix()
+    except ValueError:
+        pass
+
+    try:
+        return image_path.relative_to(data_root).as_posix()
+    except ValueError:
+        # Custom datasets outside either configured root cannot be made relative
+        # without losing the information needed to locate them again.
+        return str(image_path)
 
 
 def official_metrics(

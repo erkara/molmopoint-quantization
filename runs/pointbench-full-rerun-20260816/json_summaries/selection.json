@@ -7,8 +7,8 @@
   "max_examples": null,
   "models": {
     "bf16": "allenai/MolmoPoint-8B",
-    "int4": "/home/erdi/Dropbox/Docs/GitRepos/molmopoint-quantization/artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16",
-    "int8": "/home/erdi/Dropbox/Docs/GitRepos/molmopoint-quantization/artifacts/MolmoPoint-8B-bnb-int8-native"
+    "int4": "artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16",
+    "int8": "artifacts/MolmoPoint-8B-bnb-int8-native"
   },
   "official_molmo2_commit": "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a",
   "positions": [

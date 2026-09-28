@@ -4,12 +4,15 @@ from pathlib import Path
 import pytest
 
 from evaluate import (
+    MODEL_DEFAULTS,
     OFFICIAL_MOLMO2_COMMIT,
     default_run_name,
     parse_variants,
+    portable_image_reference,
     render_run_comparison,
     render_sample_predictions,
     resolve_image_path,
+    resolve_model_source,
     run_json_directory,
     select_positions,
     summarize_records,
@@ -53,6 +56,16 @@ def test_default_run_name_records_scope_and_seed():
         default_run_name("pointbench", fraction=0.05, max_examples=None, seed=7)
         == "pointbench-5pct-seed7"
     )
+
+
+def test_default_model_names_are_portable_and_resolve_for_loading(tmp_path):
+    assert MODEL_DEFAULTS["int4"] == "artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16"
+    assert MODEL_DEFAULTS["int8"] == "artifacts/MolmoPoint-8B-bnb-int8-native"
+    assert resolve_model_source("allenai/MolmoPoint-8B", tmp_path) == "allenai/MolmoPoint-8B"
+
+    checkpoint = tmp_path / MODEL_DEFAULTS["int4"]
+    checkpoint.mkdir(parents=True)
+    assert resolve_model_source(MODEL_DEFAULTS["int4"], tmp_path) == str(checkpoint)
 
 
 def test_official_summary_uses_equal_category_weighting():
@@ -218,6 +231,34 @@ def test_resolve_image_path_prefers_an_existing_original(tmp_path):
     assert resolved == original
 
 
+def test_image_references_are_saved_relative_to_the_project_or_data_root(tmp_path):
+    project = tmp_path / "project"
+    project_image = project / "data/official/images/example.png"
+    project_image.parent.mkdir(parents=True)
+    project_image.touch()
+    assert (
+        portable_image_reference(
+            project_image,
+            data_dir=project / "data/official",
+            project_dir=project,
+        )
+        == "data/official/images/example.png"
+    )
+
+    external_data = tmp_path / "external-data"
+    external_image = external_data / "images/example.png"
+    external_image.parent.mkdir(parents=True)
+    external_image.touch()
+    assert (
+        portable_image_reference(
+            external_image,
+            data_dir=external_data,
+            project_dir=project,
+        )
+        == "images/example.png"
+    )
+
+
 def test_resolve_image_path_lists_attempted_locations(tmp_path):
     stale = Path("/former/project/data/missing/image.img")
 
@@ -254,3 +295,16 @@ def test_failed_examples_make_evaluation_incomplete():
     assert summary["passed_examples"] == 1
     assert summary["failed_examples"] == 1
     assert summary["evaluation_complete"] is False
+
+
+def test_published_run_records_do_not_contain_machine_specific_paths():
+    published_runs = (
+        PROJECT_ROOT / "runs/pixmo-points-full-rerun-20260816/json_summaries",
+        PROJECT_ROOT / "runs/pointbench-full-rerun-20260816/json_summaries",
+    )
+    forbidden = ("/home/", "/Users/", "Dropbox/", "Docs/GitRepos/")
+    for directory in published_runs:
+        for path in directory.iterdir():
+            if path.suffix in {".json", ".jsonl"}:
+                content = path.read_text(encoding="utf-8")
+                assert not any(value in content for value in forbidden), path

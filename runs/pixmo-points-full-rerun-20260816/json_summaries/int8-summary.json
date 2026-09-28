@@ -8,7 +8,7 @@
     "precision": 0.863018,
     "recall": 0.841682
   },
-  "model": "/home/erdi/Dropbox/Docs/GitRepos/molmopoint-quantization/artifacts/MolmoPoint-8B-bnb-int8-native",
+  "model": "artifacts/MolmoPoint-8B-bnb-int8-native",
   "official_molmo2_commit": "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a",
   "passed_examples": 231,
   "performance": {
