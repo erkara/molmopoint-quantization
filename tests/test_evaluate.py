@@ -115,13 +115,15 @@ def test_pointing_summary_marks_partial_public_recovery():
     assert summary["performance"]["max_peak_vram_gib"] == 9.0
 
 
-def test_official_extra_declares_direct_http_dependencies():
+def test_standard_install_includes_evaluator_and_development_tools():
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    official = project["project"]["optional-dependencies"]["official"]
-    assert "httpx>=0.27,<1" in official
-    assert "matplotlib>=3.8,<4" in official
-    assert "openai>=1,<3" in official
-    assert "tqdm>=4.66,<5" in official
+    dependencies = project["project"]["dependencies"]
+    assert "httpx>=0.27,<1" in dependencies
+    assert "matplotlib>=3.8,<4" in dependencies
+    assert "openai>=1,<3" in dependencies
+    assert "pytest>=8,<10" in dependencies
+    assert "ruff>=0.12,<1" in dependencies
+    assert "tqdm>=4.66,<5" in dependencies
 
 
 @pytest.mark.parametrize(

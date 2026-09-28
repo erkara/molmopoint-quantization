@@ -1,20 +1,34 @@
 # MolmoPoint-8B Quantization
 
-Reproducible INT4 and INT8 releases for
-[`allenai/MolmoPoint-8B`](https://huggingface.co/allenai/MolmoPoint-8B), with
-official-protocol quality evaluation against the BF16 model.
+This repository contains the scripts and fixed recipes used to build and
+evaluate two lower-memory versions of
+[`allenai/MolmoPoint-8B`](https://huggingface.co/allenai/MolmoPoint-8B): INT4
+and INT8.
+
+Both versions remain close to the BF16 model on the tested pointing benchmarks
+while using substantially less GPU memory.
+
+| Model | PointBench accuracy | PixMo-Points F1 | Peak VRAM |
+| --- | ---: | ---: | ---: |
+| [BF16](https://huggingface.co/allenai/MolmoPoint-8B) | 70.90% | 84.02% | 18.26 GiB |
+| [INT4](https://huggingface.co/erdi28/MolmoPoint-8B-bnb-nf4-vision-bf16) | 70.69% | 84.11% | 8.72 GiB |
+| [INT8](https://huggingface.co/erdi28/MolmoPoint-8B-bnb-int8-native) | 71.00% | 84.49% | 11.68 GiB |
+
+PixMo-Points results cover 231 of the dataset's 436 examples: the images that
+could still be downloaded and verified. See [`RESULTS.md`](RESULTS.md) for the
+full protocol, coverage, hardware details, and interpretation.
 
 [![MolmoPoint quality and memory comparison](runs/full_comparison.png)](RESULTS.md)
 
-This repository provides two reproducible workflows:
+Two scripts cover the complete workflow:
 
 1. `quantize.py` builds Hugging Face-compatible INT4 and INT8 checkpoints.
-2. `evaluate.py` evaluates BF16, INT4, and INT8 with AllenAI's official
-   PointBench or PointingEval protocol.
+2. `evaluate.py` compares BF16, INT4, and INT8 using AllenAI's official
+   PointBench or PointingEval scorer.
 
-INT4 uses NF4 for the language transformer while retaining the vision path and
-pointing head in BF16. INT8 uses LLM.int8 while retaining the pointing head in
-BF16 for native compatibility.
+INT4 quantizes the language transformer with NF4 while keeping the vision path
+and pointing head in BF16. INT8 uses LLM.int8 for all supported linear layers
+except the pointing head, so it loads without a runtime patch.
 
 ## Install
 
@@ -24,7 +38,7 @@ for model building and inference.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[official,dev]"
+python -m pip install -e .
 ```
 
 AllenAI's official evaluator is used from a separately pinned Molmo2 checkout.
@@ -38,7 +52,7 @@ python quantize.py --variant int4
 python quantize.py --variant int8
 ```
 
-The two immutable release recipes are:
+The two fixed recipes used for the releases are:
 
 - [`configs/int4.yaml`](configs/int4.yaml)
 - [`configs/int8.yaml`](configs/int8.yaml)
@@ -50,23 +64,24 @@ artifacts/MolmoPoint-8B-bnb-nf4-vision-bf16/
 artifacts/MolmoPoint-8B-bnb-int8-native/
 ```
 
-Each artifact contains packed weights, upstream model/processor assets, and a
-`quantization_provenance.json`. The build refuses to overwrite an existing
-checkpoint unless `--overwrite` is supplied. Use `evaluate.py` to load and
-validate the resulting checkpoints with real benchmark examples.
+Each artifact contains quantized model weights, upstream model and processor
+files, and a `quantization_provenance.json`. The build refuses to overwrite an
+existing checkpoint unless `--overwrite` is supplied. Use `evaluate.py` to load
+and validate the resulting checkpoints with real benchmark examples.
 
 Checkpoint weights are not stored in Git. This repository contains the recipes
-needed to build them locally, along with model cards under [`huggingface/`](huggingface/).
+needed to build them locally, along with model cards under
+[`huggingface/`](huggingface/).
 
 ## Evaluate the models
 
-The evaluator supports exactly two datasets. One dataset is evaluated per
-command; `--variants all` means all three model variants, not all datasets.
+The evaluator supports two datasets. Choose one dataset per command;
+`--variants all` evaluates BF16, INT4, and INT8 on that dataset.
 
 | CLI value | Evaluation task | Public-data status | Validation |
 | --- | --- | --- | --- |
-| `pointbench` | PointBench with AllenAI's official scorer | Complete: 982/982 examples | Full GPU run: 982/982 passed, zero failures |
-| `pixmo-points` | PixMo-Points with AllenAI's PointingEval protocol | Partial public recovery: 231/436 images were available and SHA-verified | Full available-data GPU run: 231/231 passed, zero failures |
+| `pointbench` | PointBench with AllenAI's official scorer | Complete: 982/982 examples | 982 examples processed, zero execution errors |
+| `pixmo-points` | PixMo-Points with AllenAI's PointingEval protocol | Partial: 231/436 public images were available and SHA-verified | 231 available examples processed, zero execution errors |
 
 Run BF16, INT4, and INT8 on the same deterministic 5% sample:
 
@@ -86,8 +101,7 @@ Use `--dataset pixmo-points` for PixMo-Points. Omit `--fraction` (or
 python evaluate.py --variants all --dataset pointbench --download-if-missing
 ```
 
-One dataset is evaluated per command. Every variant in a command uses the same
-deterministic example selection.
+Every model in a command uses the same seeded example selection.
 
 Useful options:
 
@@ -103,7 +117,7 @@ Useful options:
 ```
 
 `--fraction` and `--max-examples` are mutually exclusive. Models run in
-separate processes so CUDA state cannot leak between variants.
+separate processes so GPU memory is reset between models.
 
 ## Saved evaluation output
 
@@ -119,7 +133,7 @@ json_summaries/
   int4-summary.json
   int8-summary.json
   summary.json          Combined comparison
-full_comparison.png     Quality-versus-VRAM plot for the effective variants
+full_comparison.png     Quality-versus-VRAM plot for the compared models
 sample_predictions.png  Three deterministic qualitative examples
 ```
 
@@ -128,30 +142,23 @@ results always have a baseline.
 
 The sample command above writes to `runs/pointbench-5pct-seed0/` by default.
 
-Raw run outputs, `data/`, and `artifacts/` are intentionally excluded from Git.
-The combined publication figure at `runs/full_comparison.png` is retained along
-with the documented results in [`RESULTS.md`](RESULTS.md).
-
-## Dataset availability
-
-- PointBench is fully public: 982/982 examples were reproduced.
-- PixMo-Points publishes 436 metadata rows but stores images at external URLs.
-  At evaluation time, only 231 images could be recovered and SHA-verified.
-
-The evaluator records both selected-example count and public-data coverage; it
-never labels a partial PixMo run as full.
+Local datasets, checkpoints, and newly generated evaluation runs are excluded
+from Git. The two complete runs used for the published results remain tracked
+under `runs/`, together with the combined figure at `runs/full_comparison.png`.
 
 ## Repository map
 
 ```text
-quantize.py       Build/package final INT4 or INT8
-evaluate.py       Download data and run official evaluation
-molmo_common.py   Shared native loading and deterministic inference
-configs/          Two final release recipes
-tests/            Lightweight CPU-only integration tests
-runs/             Published comparison figure; local run outputs are ignored
-huggingface/      INT4 and INT8 model cards
-RESULTS.md        Selection evidence and final results
+quantize.py           Build/package final INT4 or INT8
+evaluate.py           Download data and run official evaluation
+molmo_common.py       Shared native loading and deterministic inference
+render_comparison.py  Rebuild the combined publication figure
+configs/              Two final release recipes
+tests/                Lightweight CPU-only checks
+runs/                 Published full evaluation records and figures
+huggingface/          Model cards and demo assets for the Hugging Face releases
+RESULTS.md            Selection evidence and final results
+LICENSE               Apache License 2.0 for the original code and documentation
 ```
 
 ## Limitations
@@ -160,9 +167,10 @@ Aggregate scores are close, but individual generations can differ. Results
 should be interpreted as agreement on tested examples, not as lossless or
 identical behavior across model variants.
 
-## Attribution and publication
+## License and attribution
 
-The checkpoints are derivatives of AllenAI's Apache-2.0-licensed
-MolmoPoint-8B. They must retain upstream attribution and responsible-use
-guidance. A source-code license for this repository must be selected before the
-GitHub repository is made public.
+Except where otherwise noted, the original code and documentation in this
+repository are licensed under the [Apache License 2.0](LICENSE).
+
+Quantized checkpoints are derived from `allenai/MolmoPoint-8B`. Third-party
+components and assets retain their respective licenses and terms.

@@ -4,78 +4,194 @@ base_model_relation: quantized
 library_name: transformers
 pipeline_tag: image-text-to-text
 license: apache-2.0
-datasets:
-  - allenai/pixmo-points-eval
+language:
+  - en
 tags:
   - molmo
   - molmopoint
   - bitsandbytes
   - int8
+  - mixed-precision
   - quantized
 ---
 
 # MolmoPoint-8B — bitsandbytes LLM.int8
 
-> Draft model card. Replace the repository identifier before publication.
+This is an inference-ready bitsandbytes LLM.int8 quantization of
+[`allenai/MolmoPoint-8B`](https://huggingface.co/allenai/MolmoPoint-8B). All
+eligible linear modules are quantized except the 7.5M-parameter pointing head,
+which remains BF16. This avoids a runtime patch because bitsandbytes 0.50.0's
+INT8 kernel does not natively accept the pointing head's high-rank inputs.
 
-This is a bitsandbytes LLM.int8 derivative of `allenai/MolmoPoint-8B`. The
-7.5M-parameter pointing head is retained in BF16 because bitsandbytes 0.50.0's
-INT8 kernel does not natively accept its high-rank input tensors. This is under
-0.1% of the model and avoids requiring users to install a runtime monkey patch.
+## Evaluation overview
+
+![BF16, INT8, and INT4 results on PointBench and PixMo-Points](full_comparison.png)
+
+The figure compares both released quantizations with the BF16 baseline. See
+[Evaluation](#evaluation) for coverage, protocol, and metric details.
+
+## Model details
+
+- **Repository:** `erdi28/MolmoPoint-8B-bnb-int8-native`
+- **Base model:** `allenai/MolmoPoint-8B`
+- **Base revision:** `188130f961c8e0888a34e11121a1423c461a01ba`
+- **Quantized:** all eligible linear modules outside `model.point_predictor`
+- **Retained in BF16:** `model.point_predictor` (7.5M parameters; under 0.1% of
+  the model)
+- **Outlier threshold:** 6.0
+- **Local checkpoint size:** approximately 9.3 GiB
+- **Source and evaluation code:**
+  [`erkara/molmopoint-quantization`](https://github.com/erkara/molmopoint-quantization)
+
+The included `quantization_provenance.json` records the resolved base revision,
+complete quantization recipe, software versions, and build environment.
+
+## Requirements
+
+The checkpoint was built and validated with Python 3.12, Transformers 4.57.1,
+bitsandbytes 0.50.0, and a CUDA-capable NVIDIA GPU. It contains the processor and
+trusted custom model code required for native Transformers loading.
+
+```bash
+pip install "transformers==4.57.1" "bitsandbytes==0.50.0" accelerate torch torchvision pillow einops decord2
+```
 
 ## Usage
 
 ```python
+import torch
+from PIL import Image
+from huggingface_hub import hf_hub_download
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
-repo_id = "YOUR_USERNAME/MolmoPoint-8B-bnb-int8"
-processor = AutoProcessor.from_pretrained(repo_id, trust_remote_code=True)
+repo_id = "erdi28/MolmoPoint-8B-bnb-int8-native"
+
+processor = AutoProcessor.from_pretrained(
+    repo_id,
+    trust_remote_code=True,
+    padding_side="left",
+    use_fast=False,
+)
 model = AutoModelForImageTextToText.from_pretrained(
     repo_id,
     trust_remote_code=True,
     dtype="auto",
     device_map="auto",
 )
+model.eval()
+
+image_path = hf_hub_download(repo_id, "examples/pointing-demo.jpg")
+image = Image.open(image_path).convert("RGB")
+prompt = "Point to the tool that people can use to write."
+messages = [{
+    "role": "user",
+    "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image", "image": image},
+    ],
+}]
+
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    add_generation_prompt=True,
+    return_tensors="pt",
+    return_dict=True,
+    padding=True,
+    return_pointing_metadata=True,
+)
+metadata = inputs.pop("metadata")
+inputs = {name: value.to("cuda") for name, value in inputs.items()}
+prompt_length = inputs["input_ids"].shape[1]
+
+with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+    output = model.generate(
+        **inputs,
+        logits_processor=model.build_logit_processor_from_inputs(inputs),
+        do_sample=False,
+        max_new_tokens=128,
+    )
+
+generated = output[:, prompt_length:]
+generated_text = processor.post_process_image_text_to_text(
+    generated,
+    skip_special_tokens=False,
+    clean_up_tokenization_spaces=False,
+)[0]
+points = model.extract_image_points(
+    generated_text,
+    metadata["token_pooling"],
+    metadata["subpatch_mapping"],
+    metadata["image_sizes"],
+)
+
+print(generated_text)
+print(points)
 ```
 
-## Quantization details
+### Example output
 
-- Quantized: all eligible linear modules outside `model.point_predictor`
-- Retained in BF16: `model.point_predictor` (7.5M parameters)
-- bitsandbytes outlier threshold: 6.0
+![INT8 grounding output with predicted points on both mechanical pencils](examples/pointing-demo-int8-result.png)
+
+This checkpoint returns two points near `(324, 100)` and `(627, 187)` in the
+1200 x 800 source image, corresponding to the blue and red mechanical pencils.
+The demo image is a compressed copy of a
+[CC0 Public Domain image from PxHere](https://pxhere.com/en/photo/899556).
+MolmoPoint emits special grounding tokens, which `extract_image_points`
+converts into source-image coordinates.
 
 ## Evaluation
 
-AllenAI's official Molmo2 formatter and evaluator code was pinned to commit
-`f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a`. The full 982-example PointBench
-score is 70.49 for this checkpoint versus 70.50 for reproduced BF16.
+All results use greedy decoding, batch size 1, the `uber_model_v2` prompt
+templates, and AllenAI's official Molmo2 formatter and evaluators pinned to
+commit `f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a`.
 
-PixMo-Points was evaluated with AllenAI's official PointingEval scorer on all
-231/436 examples whose source image bytes could currently be recovered and
-verified. The remaining external source URLs returned changed bytes or were
-inaccessible, so this is a partial public-data result rather than a reproduction
-of the paper's full-dataset score.
+| Benchmark | Coverage | BF16 base | This checkpoint | Delta |
+|---|---:|---:|---:|---:|
+| PointBench average accuracy | 982/982 | 70.90% | 71.00% | +0.10 pt |
+| PixMo-Points F1 | 231/436 | 84.02% | 84.49% | +0.47 pt |
 
-| Model | Precision | Recall | F1 | Mean latency | Peak VRAM |
-|---|---:|---:|---:|---:|---:|
-| BF16 base | 0.8643 | 0.8393 | 0.8440 | 1.0171 s | 18.2380 GiB |
-| LLM.int8 | 0.8621 | 0.8361 | 0.8415 | 1.4637 s | 11.6551 GiB |
+All selected examples passed with zero evaluation failures. PointBench is a
+complete public evaluation. PixMo-Points publishes 436 metadata rows through
+[`allenai/pixmo-points-eval`](https://huggingface.co/datasets/allenai/pixmo-points-eval),
+but only 231 external image URLs still returned bytes matching the published
+SHA-256 hashes. The PixMo score therefore has 52.98% public-data coverage and is
+not directly comparable with the paper's full-dataset result.
 
-The official-protocol F1 difference is -0.0025 and peak allocated VRAM is 36.1%
-lower. In the separate earlier fixed-prompt study, INT8 matched the exact generated token
-sequence on 79.56%, the point count on 96.44%, and the task F1 on 216 examples.
-Its paired macro-F1 difference was -0.0044. The checkpoint occupies about 9.3
-GiB locally. Measurements used an NVIDIA GeForce RTX 5090 Laptop GPU,
-Transformers 4.57.1, and bitsandbytes 0.50.0.
+| Measurement | BF16 base | This checkpoint |
+|---|---:|---:|
+| Peak allocated VRAM across both evaluations | 18.26 GiB | 11.68 GiB |
+| PointBench mean inference time | 1.4611 s/example | 1.9597 s/example |
+| PixMo-Points mean inference time | 1.0026 s/example | 1.4361 s/example |
 
-The saved checkpoint also passed a native fresh-process Transformers load and
-inference test without the diagnostic compatibility patch.
+Peak allocated VRAM was 36.0% lower than BF16 on the benchmark system. INT8
+was slower than BF16 in both evaluations; its benefit here is reduced memory
+and storage rather than speed. Memory and latency are environment-specific and
+should not be treated as universal hardware requirements. Full category scores
+and protocol details are available in the
+[project results](https://github.com/erkara/molmopoint-quantization/blob/main/RESULTS.md).
+
+## Intended use
+
+This checkpoint is intended for research, evaluation, and CUDA inference where
+reduced memory use is useful and MolmoPoint's image, multi-image, video, and
+grounding capabilities are required. It is a quantized derivative, not a
+fine-tuned model, and does not add new capabilities or safety training.
 
 ## Limitations
 
-This release inherits the upstream model's limitations and requires a CUDA
-environment supported by bitsandbytes. The PointingEval result uses the official
-protocol but only 231/436 publicly recoverable images; it should not be read as
-a full-dataset score or proof that individual generations are identical to
-BF16. INT8 was slower than BF16 on the benchmark hardware; its primary benefit
-here is reduced memory and storage.
+This release inherits the base model's limitations, biases, and failure modes.
+Quantization can change individual generations even when aggregate scores are
+close. The evaluation does not establish identical or lossless behavior, and
+PixMo-Points coverage is partial. Loading requires `trust_remote_code=True` and
+a CUDA environment supported by bitsandbytes.
+
+## License and responsible use
+
+This derivative retains the base model's Apache-2.0 license and attribution.
+Use is also subject to Ai2's
+[Responsible Use Guidelines](https://allenai.org/responsible-use). The upstream
+model card states that MolmoPoint-8B was trained on third-party datasets subject
+to academic and non-commercial research-use terms. Review the
+[base model card](https://huggingface.co/allenai/MolmoPoint-8B) and applicable
+source-dataset terms before use or redistribution.
