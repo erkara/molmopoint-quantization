@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the full official PointBench and PixMo-Points comparison."""
+"""Render the publication figure from full PointBench and PixMo-Points runs."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ COLORS = {"bf16": "#2878B5", "int4": "#E67E22", "int8": "#2A9D72"}
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Create the standalone publication-figure command-line interface."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--pointbench-dir",
@@ -33,7 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_records(directory: Path, variant: str) -> list[dict]:
-    """Load the latest passed record for each source example."""
+    """Load the latest successful attempt for every source example.
+
+    Evaluation files are append-only so interrupted runs can resume. Mapping by
+    source index makes a later retry supersede its earlier record.
+    """
     path = directory / f"{variant}.jsonl"
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     latest = {int(record["source_index"]): record for record in records}
@@ -46,20 +52,15 @@ def load_records(directory: Path, variant: str) -> list[dict]:
     return list(latest.values())
 
 
-def load_results(
-    pointbench_dir: Path, pixmo_dir: Path
-) -> tuple[dict, dict]:
-    """Aggregate both official datasets from raw prediction files."""
-    pointbench = {
-        variant: load_records(pointbench_dir, variant) for variant in VARIANTS
-    }
-    pixmo = {
-        variant: load_records(pixmo_dir, variant) for variant in VARIANTS
-    }
+def load_results(pointbench_dir: Path, pixmo_dir: Path) -> tuple[dict, dict]:
+    """Validate aligned runs and aggregate quality and peak-memory metrics."""
+    pointbench = {variant: load_records(pointbench_dir, variant) for variant in VARIANTS}
+    pixmo = {variant: load_records(pixmo_dir, variant) for variant in VARIANTS}
+    # Comparisons are meaningful only when every precision saw the exact same
+    # examples. Fail instead of silently aggregating mismatched resumptions.
     for name, datasets in (("PointBench", pointbench), ("PixMo-Points", pixmo)):
         source_sets = [
-            {int(record["source_index"]) for record in datasets[variant]}
-            for variant in VARIANTS
+            {int(record["source_index"]) for record in datasets[variant]} for variant in VARIANTS
         ]
         if any(sources != source_sets[0] for sources in source_sets[1:]):
             raise ValueError(f"{name} variants do not contain the same source examples")
@@ -71,18 +72,17 @@ def load_results(
             category_scores.setdefault(str(record["category"]), []).append(
                 float(record["metrics"]["accuracy"])
             )
+        # PointBench defines its headline score as an unweighted average of
+        # category means, rather than a mean over all examples.
         pointbench_average = statistics.fmean(
             statistics.fmean(values) for values in category_scores.values()
         )
-        pixmo_f1 = statistics.fmean(
-            float(record["metrics"]["f1"]) for record in pixmo[variant]
-        )
+        pixmo_f1 = statistics.fmean(float(record["metrics"]["f1"]) for record in pixmo[variant])
         results[variant] = {
             "pointbench": 100 * pointbench_average,
             "pixmo-points": 100 * pixmo_f1,
             "memory": max(
-                float(record["peak_vram_gib"])
-                for record in pointbench[variant] + pixmo[variant]
+                float(record["peak_vram_gib"]) for record in pointbench[variant] + pixmo[variant]
             ),
         }
     counts = {"pointbench": len(pointbench[VARIANTS[0]]), "pixmo-points": len(pixmo[VARIANTS[0]])}
@@ -90,6 +90,8 @@ def load_results(
 
 
 def add_bars(axis, values, annotations, title, xlabel, limit):
+    """Draw one consistently styled horizontal-bar panel."""
+
     labels = [LABELS[variant] for variant in VARIANTS]
     colors = [COLORS[variant] for variant in VARIANTS]
     bars = axis.barh(labels, values, color=colors, height=0.56)
@@ -113,7 +115,7 @@ def add_bars(axis, values, annotations, title, xlabel, limit):
 
 
 def render(results: dict, counts: dict, output: Path) -> None:
-    """Render the combined publication figure."""
+    """Render the three-panel quality-versus-memory publication figure."""
     import matplotlib.pyplot as plt
 
     plt.rcParams.update({"font.size": 10, "font.family": "DejaVu Sans"})
@@ -175,6 +177,8 @@ def render(results: dict, counts: dict, output: Path) -> None:
 
 
 def main() -> int:
+    """Load both full runs and save their combined comparison figure."""
+
     args = build_parser().parse_args()
     results, counts = load_results(args.pointbench_dir.resolve(), args.pixmo_dir.resolve())
     for variant in VARIANTS:

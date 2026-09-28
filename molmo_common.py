@@ -5,41 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from PIL import Image
 
-
-@dataclass(frozen=True)
-class Point:
-    object_id: int | float
-    image_id: int | float
-    x: float
-    y: float
-
-
-@dataclass(frozen=True)
-class InferenceResult:
-    model: str
-    processor: str
-    variant: str
-    prompt: str
-    image: str
-    generated_text: str
-    generated_token_ids: list[int]
-    points: list[Point]
-    parse_success: bool
-    inference_seconds: float
-    peak_vram_gib: float
-
-    def to_dict(self) -> dict:
-        payload = asdict(self)
-        payload["status"] = "passed"
-        return payload
+# --- Model loading ----------------------------------------------------------
 
 
 def require_cuda() -> None:
+    """Fail early when a workflow requiring bitsandbytes CUDA kernels is used."""
+
     import torch
 
     if not torch.cuda.is_available():
@@ -47,6 +22,8 @@ def require_cuda() -> None:
 
 
 def torch_dtype(name: str):
+    """Translate a configuration dtype name into its PyTorch representation."""
+
     import torch
 
     dtypes = {
@@ -68,9 +45,16 @@ def load_model(
     revision: str = "main",
     dtype: str = "bfloat16",
 ):
-    """Load an upstream BF16 model or an already-packed checkpoint natively."""
+    """Load an upstream BF16 model or already-packed quantized checkpoint.
+
+    Packed bitsandbytes checkpoints describe their quantization in their saved
+    configuration, so no runtime patch or second quantization config is needed.
+    The processor may come from a separate source for diagnostic runs.
+    """
 
     require_cuda()
+    # bitsandbytes emits repetitive informational messages for every isolated
+    # evaluation worker; genuine load failures still propagate as exceptions.
     logging.getLogger("bitsandbytes").setLevel(logging.ERROR)
     logging.getLogger("bitsandbytes.autograd._functions").setLevel(logging.ERROR)
 
@@ -94,6 +78,9 @@ def load_model(
     return model, processor
 
 
+# --- Pointing inference -----------------------------------------------------
+
+
 def run_image(
     model,
     processor,
@@ -104,8 +91,8 @@ def run_image(
     image_path: str | Path,
     prompt: str,
     max_new_tokens: int = 200,
-) -> InferenceResult:
-    """Open an image and run deterministic pointing inference."""
+) -> dict:
+    """Open an image from disk and delegate deterministic pointing inference."""
     image_path = Path(image_path).resolve()
     with Image.open(image_path) as opened:
         image = opened.convert("RGB")
@@ -133,8 +120,13 @@ def run_pil_image(
     image_reference: str,
     prompt: str,
     max_new_tokens: int = 200,
-) -> InferenceResult:
-    """Run greedy pointing inference and return absolute image coordinates."""
+) -> dict:
+    """Run greedy pointing inference and return source-image coordinates.
+
+    MolmoPoint generates special point tokens. The processor retains metadata
+    that maps those tokens through pooled patches and back to the original image
+    dimensions; ``extract_image_points`` performs that final conversion.
+    """
 
     import torch
 
@@ -148,6 +140,8 @@ def run_pil_image(
             ],
         }
     ]
+    # Request pointing metadata alongside tensors. Removing it before calling
+    # ``generate`` prevents non-tensor metadata from reaching the model.
     inputs = processor.apply_chat_template(
         messages,
         tokenize=True,
@@ -161,6 +155,8 @@ def run_pil_image(
     inputs = {key: value.to("cuda") for key, value in inputs.items()}
     prompt_length = inputs["input_ids"].shape[1]
 
+    # Synchronization brackets the asynchronous CUDA work so latency and peak
+    # allocation are comparable across variants.
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.synchronize()
     started_at = time.perf_counter()
@@ -174,6 +170,8 @@ def run_pil_image(
     torch.cuda.synchronize()
     inference_seconds = time.perf_counter() - started_at
 
+    # Decode only newly generated tokens; including the input prompt would make
+    # official scoring and point extraction incorrect.
     generated = output[:, prompt_length:]
     token_ids = [int(token_id) for token_id in generated[0].detach().cpu().tolist()]
     generated_text = processor.post_process_image_text_to_text(
@@ -187,32 +185,42 @@ def run_pil_image(
         metadata["subpatch_mapping"],
         metadata["image_sizes"],
     )
-    points = [
-        Point(
-            object_id=_number(point[0]),
-            image_id=_number(point[1]),
-            x=float(point[2]),
-            y=float(point[3]),
+    points = []
+    for raw_point in raw_points or []:
+        object_id = float(raw_point[0])
+        image_id = float(raw_point[1])
+        points.append(
+            {
+                "object_id": int(object_id) if object_id.is_integer() else object_id,
+                "image_id": int(image_id) if image_id.is_integer() else image_id,
+                "x": float(raw_point[2]),
+                "y": float(raw_point[3]),
+            }
         )
-        for point in (raw_points or [])
-    ]
-    return InferenceResult(
-        model=model_name,
-        processor=processor_name,
-        variant=variant,
-        prompt=prompt,
-        image=image_reference,
-        generated_text=generated_text,
-        generated_token_ids=token_ids,
-        points=points,
-        parse_success=bool(points),
-        inference_seconds=round(inference_seconds, 6),
-        peak_vram_gib=round(torch.cuda.max_memory_allocated() / 1024**3, 4),
-    )
+
+    # This is already the evaluator's JSONL shape, so no intermediate result
+    # object or serialization method is necessary.
+    return {
+        "status": "passed",
+        "model": model_name,
+        "processor": processor_name,
+        "variant": variant,
+        "prompt": prompt,
+        "image": image_reference,
+        "generated_text": generated_text,
+        "generated_token_ids": token_ids,
+        "points": points,
+        "parse_success": bool(points),
+        "inference_seconds": round(inference_seconds, 6),
+        "peak_vram_gib": round(torch.cuda.max_memory_allocated() / 1024**3, 4),
+    }
+
+
+# --- Result files -----------------------------------------------------------
 
 
 def write_json(path: str | Path, payload: dict) -> None:
-    """Write JSON atomically."""
+    """Write formatted JSON atomically to avoid partial run metadata."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -221,13 +229,8 @@ def write_json(path: str | Path, payload: dict) -> None:
 
 
 def read_jsonl(path: str | Path) -> list[dict]:
-    """Read JSONL records, returning an empty list when absent."""
+    """Read resumable JSONL records, returning an empty list when absent."""
     source = Path(path)
     if not source.exists():
         return []
     return [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line]
-
-
-def _number(value) -> int | float:
-    numeric = float(value)
-    return int(numeric) if numeric.is_integer() else numeric

@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
-"""Evaluate BF16 and promoted INT4/INT8 models with AllenAI's official protocol."""
+"""Evaluate BF16 and promoted quantizations with AllenAI's official protocol.
+
+The parent process fixes a shared deterministic sample and launches one worker
+per precision. Workers append one JSON record per example, making runs safe to
+resume, while process isolation prevents model and CUDA state from leaking from
+one variant into another.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +28,9 @@ from tqdm import tqdm
 from molmo_common import load_model, read_jsonl, run_pil_image, write_json
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-# Immutable upstream inputs used to build and score the release artifacts.
+
+# Immutable upstream inputs used to format prompts and score predictions. These
+# pins keep future upstream changes from silently altering published results.
 OFFICIAL_MOLMO2_COMMIT = "f3cb1085fbb97c4a4d7fdcadd77cf871bf37a88a"
 BASE_MODEL_REVISION = "188130f961c8e0888a34e11121a1423c461a01ba"
 PROMPT_TEMPLATES = "uber_model_v2"
@@ -38,7 +45,12 @@ MODEL_DEFAULTS = {
 }
 
 
+# --- Command-line entry point ----------------------------------------------
+
+
 def build_parser() -> argparse.ArgumentParser:
+    """Create the public CLI plus private arguments used by worker processes."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variants", default="all", help="all or comma-separated bf16,int4,int8")
     parser.add_argument("--dataset", choices=tuple(DATASETS), required=True)
@@ -73,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Prepare pinned dependencies and dispatch parent or worker execution."""
+
     args = build_parser().parse_args(argv)
     source = prepare_official_source(args.official_source, args.download_if_missing)
     commit = configure_official_source(source, args.data_dir)
@@ -88,8 +102,11 @@ def main(argv: list[str] | None = None) -> int:
     return run_comparison(args, dataset, commit)
 
 
+# --- Run orchestration and process isolation -------------------------------
+
+
 def run_comparison(args: argparse.Namespace, dataset, official_commit: str) -> int:
-    """Evaluate the effective variants and write one resumable run."""
+    """Evaluate requested variants against one immutable, resumable selection."""
     variants = parse_variants(args.variants)
     positions = select_positions(
         len(dataset), fraction=args.fraction, max_examples=args.max_examples, seed=args.seed
@@ -102,6 +119,8 @@ def run_comparison(args: argparse.Namespace, dataset, official_commit: str) -> i
     json_dir = run_json_directory(run_dir)
     json_dir.mkdir(parents=True, exist_ok=True)
     selection_path = json_dir / "selection.json"
+    # Persist every input that affects example selection or model identity. A
+    # resume is rejected if any of them differs from the original invocation.
     selection = {
         "schema_version": 1,
         "dataset": args.dataset,
@@ -112,8 +131,7 @@ def run_comparison(args: argparse.Namespace, dataset, official_commit: str) -> i
         "max_examples": args.max_examples,
         "seed": args.seed,
         "models": {
-            variant: getattr(args, f"{variant}_model")
-            for variant in ("bf16", "int4", "int8")
+            variant: getattr(args, f"{variant}_model") for variant in ("bf16", "int4", "int8")
         },
         "base_revision": args.revision,
         "positions": positions,
@@ -132,6 +150,8 @@ def run_comparison(args: argparse.Namespace, dataset, official_commit: str) -> i
         f"saved {selection_path}"
     )
 
+    # A fresh process per model releases all CUDA allocations before the next
+    # variant loads and makes peak-memory comparisons reproducible.
     for variant in variants:
         command = worker_command(args, variant, selection_path)
         print(f"[evaluate] Starting isolated {variant} worker")
@@ -170,7 +190,7 @@ def run_comparison(args: argparse.Namespace, dataset, official_commit: str) -> i
 
 
 def run_worker(args: argparse.Namespace, dataset, official_commit: str) -> int:
-    """Evaluate one model variant in an isolated process."""
+    """Evaluate or resume one model variant inside an isolated process."""
     if not args._variant or not args._selection:
         raise ValueError("Internal worker requires --_variant and --_selection")
     variant = args._variant
@@ -180,6 +200,8 @@ def run_worker(args: argparse.Namespace, dataset, official_commit: str) -> int:
     run_dir = selection_path.parent
     output_path = run_dir / f"{variant}.jsonl"
     summary_path = run_dir / f"{variant}-summary.json"
+    # JSONL is append-only. A passed latest attempt is complete; failed or
+    # missing examples remain pending and can be retried safely.
     latest = latest_by_source_index(read_jsonl(output_path))
     pending = [
         position
@@ -248,9 +270,9 @@ def run_worker(args: argparse.Namespace, dataset, official_commit: str) -> int:
     return 0 if summary["evaluation_complete"] and not summary["failed_examples"] else 1
 
 
-def worker_command(
-    args: argparse.Namespace, variant: str, selection_path: Path
-) -> list[str]:
+def worker_command(args: argparse.Namespace, variant: str, selection_path: Path) -> list[str]:
+    """Build the internal subprocess command for one model variant."""
+
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -285,8 +307,11 @@ def worker_command(
     return command
 
 
+# --- Selection and official evaluator setup --------------------------------
+
+
 def parse_variants(raw: str) -> list[str]:
-    """Normalize requested variants and add the BF16 baseline when needed."""
+    """Normalize variants and ensure every candidate has a BF16 baseline."""
     if raw == "all":
         return ["bf16", "int4", "int8"]
     values = [value.strip().lower() for value in raw.split(",") if value.strip()]
@@ -306,7 +331,7 @@ def select_positions(
     max_examples: int | None = None,
     seed: int = 0,
 ) -> list[int]:
-    """Select deterministic dataset positions."""
+    """Select deterministic positions while preserving dataset order."""
     if length < 1:
         raise ValueError("Dataset is empty")
     if fraction is not None:
@@ -331,6 +356,8 @@ def default_run_name(
     max_examples: int | None,
     seed: int,
 ) -> str:
+    """Describe the dataset, sample size, and seed in a stable directory name."""
+
     if fraction is not None:
         scope = f"{fraction * 100:g}pct"
     elif max_examples is not None:
@@ -341,7 +368,7 @@ def default_run_name(
 
 
 def prepare_official_source(path: str | Path, download_if_missing: bool) -> Path:
-    """Locate or fetch the pinned AllenAI Molmo2 source tree."""
+    """Locate or minimally fetch the pinned AllenAI Molmo2 source tree."""
     source = Path(path).resolve()
     if (source / "olmo/eval/evaluators.py").is_file():
         return source
@@ -354,6 +381,8 @@ def prepare_official_source(path: str | Path, download_if_missing: bool) -> Path
     if source.exists() and any(source.iterdir()):
         raise FileExistsError(f"Cannot initialize non-empty official source directory: {source}")
     source.mkdir(parents=True, exist_ok=True)
+    # Fetch only the pinned commit; a complete Molmo2 history is unnecessary for
+    # evaluation and would make clean-environment setup much larger.
     subprocess.run(["git", "init"], cwd=source, check=True)
     subprocess.run(
         ["git", "remote", "add", "origin", "https://github.com/allenai/molmo2.git"],
@@ -370,7 +399,7 @@ def prepare_official_source(path: str | Path, download_if_missing: bool) -> Path
 
 
 def configure_official_source(source: str | Path, data_dir: str | Path) -> str:
-    """Activate the official source tree and verify its commit."""
+    """Import the official evaluator, configure its cache, and verify its pin."""
     source = Path(source).resolve()
     source_text = str(source)
     if source_text not in sys.path:
@@ -397,7 +426,12 @@ def load_dataset(
     download_if_missing: bool,
     download_workers: int,
 ):
-    """Load a prepared official evaluation dataset."""
+    """Load PointBench or the publicly recoverable PixMo-Points subset.
+
+    PointBench can be reconstructed completely from its public repository.
+    PixMo-Points stores external image URLs, so its prepared directory may
+    contain only images whose bytes remain available and SHA-verified.
+    """
     data_dir = Path(data_dir).resolve()
     if name == "pointbench":
         from huggingface_hub import hf_hub_download
@@ -405,6 +439,8 @@ def load_dataset(
 
         pointbench_root = data_dir / "torch_datasets/point_arena"
         data_json = pointbench_root / "data.json"
+        # ``data.json`` alone is insufficient: the official loader also expects
+        # materialized images and masks.
         ready = (
             data_json.is_file()
             and (pointbench_root / "selected_images").is_dir()
@@ -430,9 +466,10 @@ def load_dataset(
     from olmo.data.pixmo_datasets import PixMoPointsEval
 
     path = Path(
-        pixmo_path
-        or data_dir / "torch_datasets/pixmo_datasets/pixmo-points-eval-public-union"
+        pixmo_path or data_dir / "torch_datasets/pixmo_datasets/pixmo-points-eval-public-union"
     ).resolve()
+    # The official dataset class exposes its location as a class attribute.
+    # Point it at the verified public union before constructing the dataset.
     PixMoPointsEval.path = str(path)
     if not path.exists():
         if not download_if_missing:
@@ -443,11 +480,15 @@ def load_dataset(
     return PixMoPointsEval()
 
 
+# --- One-example inference and official scoring ----------------------------
+
+
 def official_prompt(example: dict, source_index: int) -> str:
-    """Format an example with AllenAI's official prompt template."""
+    """Reproduce AllenAI's deterministic inference prompt for one example."""
     from olmo.data.utils import make_random_state
     from olmo.models.molmo_point.molmo_point_data_formatter import MolmoPointDataFormatter
 
+    # Ground-truth points must never enter the inference prompt.
     prompt_example = dict(example)
     prompt_example.pop("points", None)
     formatter = MolmoPointDataFormatter(
@@ -479,7 +520,12 @@ def evaluate_one(
     variant: str,
     max_new_tokens: int,
 ) -> dict:
-    """Run and score one dataset example."""
+    """Run and officially score one example, returning a durable record.
+
+    Errors become JSONL records instead of aborting the entire multi-hour run.
+    A subsequent invocation retries them because only passed records count as
+    complete.
+    """
     example = dataset[position]
     source_index = _source_index(dataset, position)
     prompt = official_prompt(example, source_index)
@@ -501,11 +547,13 @@ def evaluate_one(
             image_reference=image_reference,
             prompt=prompt,
             max_new_tokens=max_new_tokens,
-        ).to_dict()
+        )
         metadata = dict(example.get("metadata", {}))
         metadata["image_size"] = (width, height)
         if label is not None:
             metadata.setdefault("label", str(label))
+        # Use the exact upstream evaluator rather than a local approximation of
+        # its coordinate conversion or matching rules.
         metrics = official_metrics(
             task,
             metadata=metadata,
@@ -534,7 +582,10 @@ def evaluate_one(
             "inference_seconds": result["inference_seconds"],
             "peak_vram_gib": result["peak_vram_gib"],
         }
-    except Exception as error:
+    # Example-level failures are intentionally broad so one corrupt image or
+    # transient model error does not discard all prior work. The traceback is
+    # retained in the record and the worker exits nonzero if failures remain.
+    except Exception as error:  # noqa: BLE001
         gc.collect()
         import torch
 
@@ -562,12 +613,14 @@ def resolve_image_path(
     data_dir: str | Path,
     project_dir: str | Path = PROJECT_ROOT,
 ) -> Path:
-    """Resolve a dataset image, including paths recorded before the project moved."""
+    """Resolve an image across current and legacy dataset-cache layouts."""
     original = Path(image_reference).expanduser()
     data_root = Path(data_dir).expanduser().resolve()
     project_root = Path(project_dir).expanduser().resolve()
     candidates = [original]
 
+    # Published JSONL files can contain absolute paths from the machine that ran
+    # the evaluation. Rebase the suffix following ``data/`` for portability.
     if original.is_absolute():
         parts = original.parts
         if "data" in parts:
@@ -606,7 +659,7 @@ def official_metrics(
     points: list[dict],
     tokenizer,
 ) -> dict:
-    """Score one prediction with the official dataset evaluator."""
+    """Adapt decoded points to the selected official evaluator's input schema."""
     predictions = {
         "predictions_text": [generated_text],
         "prompts_text": [prompt],
@@ -614,6 +667,7 @@ def official_metrics(
     if task == "point_bench":
         from olmo.eval.evaluators import PointBenchEval
 
+        # PointBench consumes object id plus absolute x/y coordinates directly.
         predictions["points"] = [
             np.asarray(
                 [[point["object_id"], point["x"], point["y"]] for point in points],
@@ -627,6 +681,8 @@ def official_metrics(
     from olmo.preprocessing.point_formatter import UnifiedPointFormatter
 
     width, height = metadata["image_size"]
+    # PointingEval expects the model's HTML-v2 representation rather than the
+    # raw coordinate arrays accepted by PointBench.
     coordinates = np.asarray(
         [[point["x"], point["y"]] for point in points], dtype=np.float64
     ).reshape(-1, 2)
@@ -644,6 +700,9 @@ def official_metrics(
     return {name: metric_value(output[name]) for name in ("precision", "recall", "f1")}
 
 
+# --- Summaries and visual outputs ------------------------------------------
+
+
 def summarize_records(
     records: list[dict],
     *,
@@ -656,27 +715,25 @@ def summarize_records(
     selected_examples: int,
     max_new_tokens: int,
 ) -> dict:
-    """Aggregate passed records and evaluation coverage."""
+    """Aggregate quality, coverage, latency, and peak-memory metadata."""
     latest = latest_by_source_index(records)
     passed = [record for record in latest.values() if record.get("status") == "passed"]
     failed = [record for record in latest.values() if record.get("status") == "error"]
     latencies = [float(record["inference_seconds"]) for record in passed]
     if task == "point_bench":
+        # Match the official headline metric: mean within each category, then
+        # an unweighted mean across the five categories.
         category_scores = {}
         for category in ("affordable", "counting", "reasoning", "spatial", "steerable"):
             values = [
-                record["metrics"]["accuracy"]
-                for record in passed
-                if record["category"] == category
+                record["metrics"]["accuracy"] for record in passed if record["category"] == category
             ]
             if values:
                 category_scores[category] = statistics.fmean(values)
         metrics = {
             "categories": {key: round(value, 6) for key, value in category_scores.items()},
             "average": (
-                round(statistics.fmean(category_scores.values()), 6)
-                if category_scores
-                else None
+                round(statistics.fmean(category_scores.values()), 6) if category_scores else None
             ),
         }
     else:
@@ -725,19 +782,19 @@ def summarize_records(
 
 
 def latest_by_source_index(records: list[dict]) -> dict:
+    """Collapse append-only attempts so the latest record wins."""
+
     return {int(record["source_index"]): record for record in records}
 
 
 def run_json_directory(run_dir: str | Path) -> Path:
-    """Use the legacy flat layout only when resuming an existing flat run."""
+    """Choose the current JSON subdirectory while supporting legacy resumes."""
     root = Path(run_dir)
     return root if (root / "selection.json").is_file() else root / "json_summaries"
 
 
-def render_run_comparison(
-    summaries: dict, *, dataset: str, output: str | Path
-) -> None:
-    """Render quality and memory for one evaluation run."""
+def render_run_comparison(summaries: dict, *, dataset: str, output: str | Path) -> None:
+    """Render a compact quality-and-memory comparison for one dataset run."""
     import matplotlib.pyplot as plt
 
     variants = list(summaries)
@@ -747,10 +804,7 @@ def render_run_comparison(
     quality_label = "Average accuracy (%)" if dataset == "pointbench" else "F1 (%)"
     dataset_label = "PointBench" if dataset == "pointbench" else "PixMo-Points"
     quality = [100 * float(summaries[variant]["metrics"][quality_key]) for variant in variants]
-    memory = [
-        float(summaries[variant]["performance"]["max_peak_vram_gib"])
-        for variant in variants
-    ]
+    memory = [float(summaries[variant]["performance"]["max_peak_vram_gib"]) for variant in variants]
 
     plt.rcParams.update({"font.size": 10, "font.family": "DejaVu Sans"})
     figure, axes = plt.subplots(1, 2, figsize=(8.8, 4.4), facecolor="white")
@@ -820,7 +874,7 @@ def render_sample_predictions(
     seed: int,
     output: str | Path,
 ) -> None:
-    """Render shared examples with each variant's predicted points."""
+    """Render deterministic shared examples with each variant's predictions."""
     import matplotlib.patheffects as path_effects
     import matplotlib.pyplot as plt
 
@@ -830,6 +884,8 @@ def render_sample_predictions(
         for variant in variants
     }
     position_by_source = {_source_index(dataset, position): position for position in positions}
+    # Only show examples successfully evaluated by every requested model; each
+    # row then compares identical inputs across all columns.
     common_sources = [
         source_index
         for source_index in position_by_source
@@ -845,9 +901,7 @@ def render_sample_predictions(
 
     labels = {"bf16": "BF16", "int4": "INT4", "int8": "INT8"}
     colors = {"bf16": "#2878B5", "int4": "#E67E22", "int8": "#2A9D72"}
-    figure = plt.figure(
-        figsize=(4.0 * len(variants), 3.35 * sample_count + 1.1), facecolor="white"
-    )
+    figure = plt.figure(figsize=(4.0 * len(variants), 3.35 * sample_count + 1.1), facecolor="white")
     grid = figure.add_gridspec(
         sample_count * 2,
         len(variants),
@@ -924,7 +978,12 @@ def render_sample_predictions(
     plt.close(figure)
 
 
+# --- Small compatibility adapters ------------------------------------------
+
+
 def metric_value(metric) -> float:
+    """Normalize official metric wrappers and scalar tensors to a Python float."""
+
     value = metric.compute()
     if hasattr(value, "item"):
         value = value.item()
@@ -932,6 +991,8 @@ def metric_value(metric) -> float:
 
 
 def _source_index(dataset, position: int) -> int:
+    """Recover a stable source id, falling back to the dataset position."""
+
     example = dataset[position]
     if "source_index" in example:
         return int(example["source_index"])
@@ -942,6 +1003,8 @@ def _source_index(dataset, position: int) -> int:
 
 
 def print_summary(summaries: dict) -> None:
+    """Print the headline quality and peak-memory metrics as a small table."""
+
     print("\nvariant  quality     peak VRAM")
     print("-------  ----------  ---------")
     for variant, summary in summaries.items():

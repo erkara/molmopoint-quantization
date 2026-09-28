@@ -193,8 +193,7 @@ def test_resolve_image_path_rebases_path_after_repository_moves(tmp_path):
     image.parent.mkdir(parents=True)
     image.write_bytes(b"image")
     stale = Path(
-        "/former/checkouts/Molmo-Quantization/"
-        "data/pixmo-points-eval/images/ab/example.img"
+        "/former/checkouts/Molmo-Quantization/data/pixmo-points-eval/images/ab/example.img"
     )
 
     resolved = resolve_image_path(
